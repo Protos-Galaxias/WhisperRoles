@@ -4,6 +4,19 @@ import time
 import logging
 import gc
 from pathlib import Path
+from functools import wraps
+
+import torch
+
+_original_torch_load = torch.load
+
+@wraps(_original_torch_load)
+def _patched_torch_load(*args, **kwargs):
+    kwargs.setdefault("weights_only", False)
+
+    return _original_torch_load(*args, **kwargs)
+
+torch.load = _patched_torch_load
 
 import whisperx
 from whisperx.diarize import DiarizationPipeline
