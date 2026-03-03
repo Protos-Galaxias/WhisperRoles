@@ -68,7 +68,10 @@ def load_models():
     diarize_model = None
     if HF_TOKEN:
         log.info("Loading diarization pipeline...")
-        diarize_model = DiarizationPipeline(token=HF_TOKEN, device=DEVICE)
+        try:
+            diarize_model = DiarizationPipeline(token=HF_TOKEN, device=DEVICE)
+        except TypeError:
+            diarize_model = DiarizationPipeline(use_auth_token=HF_TOKEN, device=DEVICE)
     else:
         log.warning("HF_TOKEN not set — diarization disabled. Set HF_TOKEN for speaker labels.")
 
