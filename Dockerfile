@@ -8,9 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir \
     torch==2.6.0+cpu \
     torchaudio==2.6.0+cpu \
+    whisperx \
     --extra-index-url https://download.pytorch.org/whl/cpu
-
-RUN pip install --no-cache-dir whisperx
 
 COPY watcher.py /app/watcher.py
 
