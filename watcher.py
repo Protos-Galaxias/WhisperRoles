@@ -1,8 +1,10 @@
 import os
 import sys
+import signal
 import time
 import logging
 import gc
+import traceback
 from pathlib import Path
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor, Future
@@ -41,6 +43,20 @@ COMPUTE_TYPE = "int8"
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".wma", ".aac"}
 
 PROCESSING_SUFFIX = ".processing"
+ERROR_SUFFIX = ".error"
+
+shutting_down = False
+
+
+def handle_shutdown(signum, _frame):
+    global shutting_down
+    sig_name = signal.Signals(signum).name
+    log.info("Received %s — finishing current files and shutting down...", sig_name)
+    shutting_down = True
+
+
+signal.signal(signal.SIGTERM, handle_shutdown)
+signal.signal(signal.SIGINT, handle_shutdown)
 
 
 def format_timestamp(seconds: float) -> str:
@@ -61,6 +77,19 @@ def format_result(segments: list[dict]) -> str:
         lines.append(f"[{start} - {end}] {speaker}: {text}")
 
     return "\n".join(lines)
+
+
+def cleanup_stale_markers(watch_dir: Path):
+    count = 0
+    for f in watch_dir.iterdir():
+        if not f.name.endswith(PROCESSING_SUFFIX):
+            continue
+        log.warning("Removing stale marker: %s", f.name)
+        f.unlink(missing_ok=True)
+        count += 1
+
+    if count > 0:
+        log.info("Cleaned up %d stale .processing marker(s)", count)
 
 
 def load_models():
@@ -118,9 +147,10 @@ def get_pending_files(watch_dir: Path) -> list[Path]:
             continue
 
         txt_path = f.with_suffix(".txt")
+        error_path = f.with_suffix(f.suffix + ERROR_SUFFIX)
         processing_path = f.with_suffix(f.suffix + PROCESSING_SUFFIX)
 
-        if txt_path.exists() or processing_path.exists():
+        if txt_path.exists() or error_path.exists() or processing_path.exists():
             continue
 
         pending.append(f)
@@ -131,6 +161,7 @@ def get_pending_files(watch_dir: Path) -> list[Path]:
 def process_file(audio_path: Path, model, diarize_model):
     processing_marker = audio_path.with_suffix(audio_path.suffix + PROCESSING_SUFFIX)
     txt_path = audio_path.with_suffix(".txt")
+    error_path = audio_path.with_suffix(audio_path.suffix + ERROR_SUFFIX)
 
     try:
         processing_marker.touch()
@@ -139,6 +170,7 @@ def process_file(audio_path: Path, model, diarize_model):
         log.info("Result saved: %s", txt_path.name)
     except Exception:
         log.exception("Failed to process %s", audio_path.name)
+        error_path.write_text(traceback.format_exc(), encoding="utf-8")
     finally:
         processing_marker.unlink(missing_ok=True)
 
@@ -152,6 +184,7 @@ def main():
         WATCH_DIR.mkdir(parents=True, exist_ok=True)
         log.info("Created watch directory: %s", WATCH_DIR)
 
+    cleanup_stale_markers(WATCH_DIR)
     model, diarize_model = load_models()
 
     log.info("Watching for audio files... (poll every %ds)", POLL_INTERVAL)
@@ -159,7 +192,7 @@ def main():
     active_futures: dict[Path, Future] = {}
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        while True:
+        while not shutting_down:
             active_futures = {p: f for p, f in active_futures.items() if not f.done()}
 
             pending = get_pending_files(WATCH_DIR)
@@ -170,6 +203,13 @@ def main():
                 active_futures[audio_path] = future
 
             time.sleep(POLL_INTERVAL)
+
+        log.info("Waiting for %d active task(s) to finish...", len(active_futures))
+        for path, future in active_futures.items():
+            future.result()
+            log.info("Finished: %s", path.name)
+
+    log.info("Shutdown complete.")
 
 
 if __name__ == "__main__":
