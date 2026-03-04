@@ -104,8 +104,7 @@ def load_models():
         WHISPER_MODEL,
         DEVICE,
         compute_type=COMPUTE_TYPE,
-        cpu_threads=CPU_THREADS,
-        num_workers=MAX_WORKERS,
+        threads=CPU_THREADS,
     )
 
     diarize_model = None
