@@ -105,6 +105,7 @@ def load_models():
         DEVICE,
         compute_type=COMPUTE_TYPE,
         threads=CPU_THREADS,
+        asr_options={"beam_size": BEAM_SIZE},
     )
 
     diarize_model = None
@@ -125,7 +126,7 @@ def transcribe_file(audio_path: Path, model, diarize_model) -> str:
     start_time = time.monotonic()
 
     audio = whisperx.load_audio(str(audio_path))
-    result = model.transcribe(audio, batch_size=BATCH_SIZE, language=LANGUAGE, beam_size=BEAM_SIZE)
+    result = model.transcribe(audio, batch_size=BATCH_SIZE, language=LANGUAGE)
 
     detected_lang = result.get("language", LANGUAGE or "unknown")
     log.info("[%s] Detected language: %s", audio_path.name, detected_lang)
