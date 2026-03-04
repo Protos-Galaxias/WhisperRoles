@@ -5,6 +5,7 @@ import logging
 import gc
 from pathlib import Path
 from functools import wraps
+from concurrent.futures import ThreadPoolExecutor, Future
 
 import torch
 
@@ -33,6 +34,7 @@ POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "5"))
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")
 LANGUAGE = os.environ.get("LANGUAGE", None)
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "8"))
+MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "1"))
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 DEVICE = "cpu"
 COMPUTE_TYPE = "int8"
@@ -80,23 +82,29 @@ def load_models():
 
 def transcribe_file(audio_path: Path, model, diarize_model) -> str:
     log.info("Transcribing: %s", audio_path.name)
+    start_time = time.monotonic()
 
     audio = whisperx.load_audio(str(audio_path))
     result = model.transcribe(audio, batch_size=BATCH_SIZE, language=LANGUAGE)
 
     detected_lang = result.get("language", LANGUAGE or "unknown")
-    log.info("Detected language: %s", detected_lang)
+    log.info("[%s] Detected language: %s", audio_path.name, detected_lang)
 
-    log.info("Aligning segments...")
+    log.info("[%s] Aligning segments...", audio_path.name)
     model_a, metadata = whisperx.load_align_model(language_code=detected_lang, device=DEVICE)
     result = whisperx.align(result["segments"], model_a, metadata, audio, DEVICE, return_char_alignments=False)
     del model_a
     gc.collect()
 
     if diarize_model is not None:
-        log.info("Diarizing speakers...")
+        log.info("[%s] Diarizing speakers...", audio_path.name)
         diarize_segments = diarize_model(audio)
         result = whisperx.assign_word_speakers(diarize_segments, result)
+
+    elapsed = time.monotonic() - start_time
+    audio_duration = len(audio) / 16000
+    rtf = audio_duration / elapsed if elapsed > 0 else 0
+    log.info("[%s] Done in %.1fs (audio: %.1fs, speed: %.1fx RT)", audio_path.name, elapsed, audio_duration, rtf)
 
     return format_result(result["segments"])
 
@@ -138,7 +146,7 @@ def process_file(audio_path: Path, model, diarize_model):
 def main():
     log.info("WhisperRoles watcher starting")
     log.info("Watching: %s", WATCH_DIR)
-    log.info("Model: %s | Device: %s | Batch: %d", WHISPER_MODEL, DEVICE, BATCH_SIZE)
+    log.info("Model: %s | Device: %s | Batch: %d | Workers: %d", WHISPER_MODEL, DEVICE, BATCH_SIZE, MAX_WORKERS)
 
     if not WATCH_DIR.exists():
         WATCH_DIR.mkdir(parents=True, exist_ok=True)
@@ -147,11 +155,21 @@ def main():
     model, diarize_model = load_models()
 
     log.info("Watching for audio files... (poll every %ds)", POLL_INTERVAL)
-    while True:
-        pending = get_pending_files(WATCH_DIR)
-        for audio_path in pending:
-            process_file(audio_path, model, diarize_model)
-        time.sleep(POLL_INTERVAL)
+
+    active_futures: dict[Path, Future] = {}
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        while True:
+            active_futures = {p: f for p, f in active_futures.items() if not f.done()}
+
+            pending = get_pending_files(WATCH_DIR)
+            for audio_path in pending:
+                if audio_path in active_futures:
+                    continue
+                future = executor.submit(process_file, audio_path, model, diarize_model)
+                active_futures[audio_path] = future
+
+            time.sleep(POLL_INTERVAL)
 
 
 if __name__ == "__main__":
