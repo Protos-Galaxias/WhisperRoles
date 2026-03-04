@@ -36,6 +36,9 @@ POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "5"))
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")
 LANGUAGE = os.environ.get("LANGUAGE", None)
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "8"))
+BEAM_SIZE = int(os.environ.get("BEAM_SIZE", "1"))
+_raw_threads = int(os.environ.get("CPU_THREADS", "0"))
+CPU_THREADS = _raw_threads if _raw_threads > 0 else (os.cpu_count() or 4)
 MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "1"))
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 DEVICE = "cpu"
@@ -93,8 +96,17 @@ def cleanup_stale_markers(watch_dir: Path):
 
 
 def load_models():
-    log.info("Loading WhisperX model: %s (device=%s, compute=%s)", WHISPER_MODEL, DEVICE, COMPUTE_TYPE)
-    model = whisperx.load_model(WHISPER_MODEL, DEVICE, compute_type=COMPUTE_TYPE)
+    log.info(
+        "Loading WhisperX model: %s (device=%s, compute=%s, threads=%d, beam=%d)",
+        WHISPER_MODEL, DEVICE, COMPUTE_TYPE, CPU_THREADS, BEAM_SIZE,
+    )
+    model = whisperx.load_model(
+        WHISPER_MODEL,
+        DEVICE,
+        compute_type=COMPUTE_TYPE,
+        cpu_threads=CPU_THREADS,
+        num_workers=MAX_WORKERS,
+    )
 
     diarize_model = None
     if HF_TOKEN:
@@ -114,7 +126,7 @@ def transcribe_file(audio_path: Path, model, diarize_model) -> str:
     start_time = time.monotonic()
 
     audio = whisperx.load_audio(str(audio_path))
-    result = model.transcribe(audio, batch_size=BATCH_SIZE, language=LANGUAGE)
+    result = model.transcribe(audio, batch_size=BATCH_SIZE, language=LANGUAGE, beam_size=BEAM_SIZE)
 
     detected_lang = result.get("language", LANGUAGE or "unknown")
     log.info("[%s] Detected language: %s", audio_path.name, detected_lang)
@@ -178,7 +190,10 @@ def process_file(audio_path: Path, model, diarize_model):
 def main():
     log.info("WhisperRoles watcher starting")
     log.info("Watching: %s", WATCH_DIR)
-    log.info("Model: %s | Device: %s | Batch: %d | Workers: %d", WHISPER_MODEL, DEVICE, BATCH_SIZE, MAX_WORKERS)
+    log.info(
+        "Model: %s | Device: %s | Batch: %d | Beam: %d | Threads: %d | Workers: %d",
+        WHISPER_MODEL, DEVICE, BATCH_SIZE, BEAM_SIZE, CPU_THREADS, MAX_WORKERS,
+    )
 
     if not WATCH_DIR.exists():
         WATCH_DIR.mkdir(parents=True, exist_ok=True)

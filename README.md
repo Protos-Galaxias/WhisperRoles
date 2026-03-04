@@ -119,6 +119,8 @@ docker run -d \
 | `WHISPER_MODEL` | `small` | Размер модели: `tiny` / `base` / `small` / `medium` / `large-v2` / `large-v3-turbo` |
 | `LANGUAGE` | автоопределение | Код языка: `ru`, `en`, `de`, `fr` и т.д. Если указать — работает быстрее |
 | `BATCH_SIZE` | `8` | Размер батча. Уменьши если не хватает RAM |
+| `BEAM_SIZE` | `1` | Beam search. `1` = быстро (greedy), `5` = точнее но в 2-3x медленнее |
+| `CPU_THREADS` | auto | Потоки CTranslate2. `0` = все ядра. Подбирай под сервер |
 | `MAX_WORKERS` | `1` | Сколько файлов обрабатывать параллельно. Ставь 2-3 если хватает RAM |
 | `POLL_INTERVAL` | `5` | Как часто проверять папку (секунды) |
 
